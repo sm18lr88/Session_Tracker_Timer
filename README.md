@@ -1,18 +1,12 @@
 # Practice Session Timer
-Helps users know how far along they should be during sessions
+Helps users know how far along they should be per question block, and per question itself.
 
 Features:
 - Always-on-top.
 - Slim and narrow so it takes up the least amount of screen space.
-- Displays what question you *should* be on for the current block/session, based on the alloted time and number of questions.
-- Otherwise, pictures speak a thousand words.
+- Set opacity level.
+- Two progress bars: per question, and per block.
 
-![image](https://github.com/sm18lr88/Session_Tracker_Timer/assets/64564447/8ff40cf2-e8b4-4788-9aa7-52b7b64587b4)
+![image](https://github.com/sm18lr88/Session_Tracker_Timer/assets/64564447/a84f02a6-d0e2-46b3-8af1-0e226cbbcd2b)
 
-![image](https://github.com/sm18lr88/Session_Tracker_Timer/assets/64564447/5b2da3a8-ef7c-4f41-9738-56ebd55c7eb0)
-
-
-## To-do:
-- [ ] Give it an appropriate name
-- [ ] Make the name of this page, the code, and the app actually match each other.
-- [ ] Improve loading time for the .exe
+![clip](https://github.com/sm18lr88/Session_Tracker_Timer/assets/64564447/0abe9dc7-2fbc-4a9c-a89e-81a6b76ad4bc)
