@@ -1,0 +1,37 @@
+// resource.h - Control IDs for Session Timer
+
+#ifndef RESOURCE_H
+#define RESOURCE_H
+
+// Setup Dialog Controls
+#define IDD_SETUP_DIALOG 100
+#define IDC_EDIT_TIME_PER_BLOCK 101
+#define IDC_EDIT_NUM_BLOCKS 102
+#define IDC_EDIT_NUM_QUESTIONS 103
+#define IDC_SLIDER_TRANSPARENCY 104
+#define IDC_STATIC_TRANSPARENCY 105
+#define IDC_STATIC_TIME_LABEL 106
+#define IDC_STATIC_BLOCKS_LABEL 107
+#define IDC_STATIC_QUESTIONS_LABEL 108
+#define IDOK 1
+#define IDCANCEL 2
+
+// Timer Window Controls
+#define IDC_STATIC_QUESTION 200
+#define IDC_STATIC_QUESTION_TIME 201
+#define IDC_PROGRESS_QUESTION 202
+#define IDC_STATIC_BLOCK 203
+#define IDC_STATIC_BLOCK_TIME 204
+#define IDC_PROGRESS_BLOCK 205
+#define IDC_BTN_START_STOP 206
+#define IDC_BTN_PAUSE 207
+#define IDC_BTN_CLOSE 208
+#define IDC_BTN_SETTINGS 209
+
+// Timer ID
+#define IDT_TIMER 1
+
+// Icon
+#define IDI_APP_ICON 300
+
+#endif  // RESOURCE_H

@@ -1,0 +1,15 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# Visual Studio
+.vs/
+*.vcxproj.user
+*.suo
+*.sdf
+*.opensdf
+ipch/
+
+# Temporary folders
+session-timer-win32/
