@@ -3,6 +3,8 @@
 #include "SetupDialog.h"
 
 #include <commctrl.h>
+#include <dwmapi.h>
+#include <uxtheme.h>
 #include <windowsx.h>
 
 #include <cstdio>
@@ -10,10 +12,85 @@
 
 #include "resource.h"
 
+#pragma comment(lib, "dwmapi.lib")
+
+static const INT_PTR IDSETUP_SQUARE_ONLY = 1001;
+
 // Pointer to config passed via LPARAM
 static TimerConfig* g_pConfig = nullptr;
 static bool g_isSettings =
     false;  // true if this is settings dialog (pre-populated)
+static HBRUSH g_hDialogBackBrush = nullptr;
+static HBRUSH g_hEditBackBrush = nullptr;
+static HBRUSH g_hButtonBackBrush = nullptr;
+
+static HBRUSH EnsureBrush(HBRUSH& brush, COLORREF color) {
+  if (!brush) {
+    brush = CreateSolidBrush(color);
+  }
+  return brush;
+}
+
+static void ApplyDarkDialogTheme(HWND hDlg) {
+  const BOOL enabled = TRUE;
+  // DWMWA_USE_IMMERSIVE_DARK_MODE (20) is available on modern Windows.
+  DwmSetWindowAttribute(hDlg, 20, &enabled, sizeof(enabled));
+
+  const int controlIds[] = {
+      IDC_EDIT_TIME_PER_BLOCK, IDC_EDIT_NUM_BLOCKS, IDC_EDIT_NUM_QUESTIONS,
+      IDC_SLIDER_TRANSPARENCY, IDC_STATIC_TRANSPARENCY, IDOK, IDCANCEL,
+      IDC_BTN_SQUARE_ONLY};
+
+  for (int controlId : controlIds) {
+    HWND hCtrl = GetDlgItem(hDlg, controlId);
+    if (hCtrl) {
+      SetWindowTheme(hCtrl, L"DarkMode_Explorer", nullptr);
+    }
+  }
+}
+
+static bool ReadConfigFromDialog(HWND hDlg, TimerConfig* outConfig) {
+  BOOL success = TRUE;
+
+  int timePerBlock =
+      GetDlgItemInt(hDlg, IDC_EDIT_TIME_PER_BLOCK, &success, FALSE);
+  if (!success || timePerBlock <= 0) {
+    MessageBox(hDlg, L"Please enter a valid time per block (> 0).",
+               L"Invalid Input", MB_OK | MB_ICONWARNING);
+    SetFocus(GetDlgItem(hDlg, IDC_EDIT_TIME_PER_BLOCK));
+    return false;
+  }
+
+  int numBlocks = GetDlgItemInt(hDlg, IDC_EDIT_NUM_BLOCKS, &success, FALSE);
+  if (!success || numBlocks <= 0) {
+    MessageBox(hDlg, L"Please enter a valid number of blocks (> 0).",
+               L"Invalid Input", MB_OK | MB_ICONWARNING);
+    SetFocus(GetDlgItem(hDlg, IDC_EDIT_NUM_BLOCKS));
+    return false;
+  }
+
+  int numQuestions =
+      GetDlgItemInt(hDlg, IDC_EDIT_NUM_QUESTIONS, &success, FALSE);
+  if (!success || numQuestions <= 0) {
+    MessageBox(hDlg, L"Please enter a valid number of questions (> 0).",
+               L"Invalid Input", MB_OK | MB_ICONWARNING);
+    SetFocus(GetDlgItem(hDlg, IDC_EDIT_NUM_QUESTIONS));
+    return false;
+  }
+
+  HWND hSlider = GetDlgItem(hDlg, IDC_SLIDER_TRANSPARENCY);
+  int transparency = (int)SendMessage(hSlider, TBM_GETPOS, 0, 0);
+
+  if (outConfig) {
+    outConfig->timePerBlock = timePerBlock;
+    outConfig->numBlocks = numBlocks;
+    outConfig->numQuestions = numQuestions;
+    outConfig->transparency = transparency;
+    outConfig->ComputeDerivedValues();
+  }
+
+  return true;
+}
 
 INT_PTR CALLBACK SetupDialogProc(HWND hDlg, UINT message, WPARAM wParam,
                                  LPARAM lParam) {
@@ -29,6 +106,12 @@ INT_PTR CALLBACK SetupDialogProc(HWND hDlg, UINT message, WPARAM wParam,
       int x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
       int y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
       SetWindowPos(hDlg, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+      ApplyDarkDialogTheme(hDlg);
+
+      HWND hSquareOnly = GetDlgItem(hDlg, IDC_BTN_SQUARE_ONLY);
+      if (hSquareOnly) {
+        ShowWindow(hSquareOnly, SW_SHOW);
+      }
 
       // Initialize transparency slider (0-100)
       HWND hSlider = GetDlgItem(hDlg, IDC_SLIDER_TRANSPARENCY);
@@ -50,16 +133,44 @@ INT_PTR CALLBACK SetupDialogProc(HWND hDlg, UINT message, WPARAM wParam,
         SetDlgItemText(hDlg, IDC_STATIC_TRANSPARENCY, buf);
 
         SetWindowText(hDlg, L"Settings");
+        SetDlgItemText(hDlg, IDOK, L"Apply");
       } else {
         // Defaults
-        SetDlgItemInt(hDlg, IDC_EDIT_TIME_PER_BLOCK, 30, FALSE);
-        SetDlgItemInt(hDlg, IDC_EDIT_NUM_BLOCKS, 3, FALSE);
-        SetDlgItemInt(hDlg, IDC_EDIT_NUM_QUESTIONS, 5, FALSE);
+        SetDlgItemInt(hDlg, IDC_EDIT_TIME_PER_BLOCK, 60, FALSE);
+        SetDlgItemInt(hDlg, IDC_EDIT_NUM_BLOCKS, 2, FALSE);
+        SetDlgItemInt(hDlg, IDC_EDIT_NUM_QUESTIONS, 40, FALSE);
         SendMessage(hSlider, TBM_SETPOS, TRUE, 75);
         SetDlgItemText(hDlg, IDC_STATIC_TRANSPARENCY, L"75%");
       }
 
       return TRUE;
+    }
+
+    case WM_CTLCOLORDLG: {
+      HDC hdc = (HDC)wParam;
+      SetBkColor(hdc, RGB(28, 31, 36));
+      return (INT_PTR)EnsureBrush(g_hDialogBackBrush, RGB(28, 31, 36));
+    }
+
+    case WM_CTLCOLORSTATIC: {
+      HDC hdc = (HDC)wParam;
+      SetTextColor(hdc, RGB(230, 233, 239));
+      SetBkMode(hdc, TRANSPARENT);
+      return (INT_PTR)EnsureBrush(g_hDialogBackBrush, RGB(28, 31, 36));
+    }
+
+    case WM_CTLCOLOREDIT: {
+      HDC hdc = (HDC)wParam;
+      SetTextColor(hdc, RGB(244, 246, 250));
+      SetBkColor(hdc, RGB(45, 50, 58));
+      return (INT_PTR)EnsureBrush(g_hEditBackBrush, RGB(45, 50, 58));
+    }
+
+    case WM_CTLCOLORBTN: {
+      HDC hdc = (HDC)wParam;
+      SetTextColor(hdc, RGB(240, 243, 248));
+      SetBkColor(hdc, RGB(62, 68, 78));
+      return (INT_PTR)EnsureBrush(g_hButtonBackBrush, RGB(62, 68, 78));
     }
 
     case WM_HSCROLL: {
@@ -86,48 +197,17 @@ INT_PTR CALLBACK SetupDialogProc(HWND hDlg, UINT message, WPARAM wParam,
     case WM_COMMAND: {
       switch (LOWORD(wParam)) {
         case IDOK: {
-          BOOL success = TRUE;
-          int timePerBlock =
-              GetDlgItemInt(hDlg, IDC_EDIT_TIME_PER_BLOCK, &success, FALSE);
-          if (!success || timePerBlock <= 0) {
-            MessageBox(hDlg, L"Please enter a valid time per block (> 0).",
-                       L"Invalid Input", MB_OK | MB_ICONWARNING);
-            SetFocus(GetDlgItem(hDlg, IDC_EDIT_TIME_PER_BLOCK));
-            return TRUE;
+          if (ReadConfigFromDialog(hDlg, g_pConfig)) {
+            EndDialog(hDlg, IDOK);
           }
-
-          int numBlocks =
-              GetDlgItemInt(hDlg, IDC_EDIT_NUM_BLOCKS, &success, FALSE);
-          if (!success || numBlocks <= 0) {
-            MessageBox(hDlg, L"Please enter a valid number of blocks (> 0).",
-                       L"Invalid Input", MB_OK | MB_ICONWARNING);
-            SetFocus(GetDlgItem(hDlg, IDC_EDIT_NUM_BLOCKS));
-            return TRUE;
-          }
-
-          int numQuestions =
-              GetDlgItemInt(hDlg, IDC_EDIT_NUM_QUESTIONS, &success, FALSE);
-          if (!success || numQuestions <= 0) {
-            MessageBox(hDlg, L"Please enter a valid number of questions (> 0).",
-                       L"Invalid Input", MB_OK | MB_ICONWARNING);
-            SetFocus(GetDlgItem(hDlg, IDC_EDIT_NUM_QUESTIONS));
-            return TRUE;
-          }
-
-          HWND hSlider = GetDlgItem(hDlg, IDC_SLIDER_TRANSPARENCY);
-          int transparency = (int)SendMessage(hSlider, TBM_GETPOS, 0, 0);
-
-          if (g_pConfig) {
-            g_pConfig->timePerBlock = timePerBlock;
-            g_pConfig->numBlocks = numBlocks;
-            g_pConfig->numQuestions = numQuestions;
-            g_pConfig->transparency = transparency;
-            g_pConfig->ComputeDerivedValues();
-          }
-
-          EndDialog(hDlg, IDOK);
           return TRUE;
         }
+
+        case IDC_BTN_SQUARE_ONLY:
+          if (ReadConfigFromDialog(hDlg, g_pConfig)) {
+            EndDialog(hDlg, IDSETUP_SQUARE_ONLY);
+          }
+          return TRUE;
 
         case IDCANCEL:
           EndDialog(hDlg, IDCANCEL);
@@ -225,7 +305,7 @@ static HGLOBAL CreateSetupDialogTemplate() {
   lpdt->style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | DS_CENTER |
                 DS_SETFONT;
   lpdt->dwExtendedStyle = 0;
-  lpdt->cdit = 11;  // Number of controls
+  lpdt->cdit = 12;  // Number of controls
   lpdt->x = 0;
   lpdt->y = 0;
   lpdt->cx = 220;
@@ -237,7 +317,7 @@ static HGLOBAL CreateSetupDialogTemplate() {
 
   // Title
   LPWSTR lpwsz = (LPWSTR)lpw;
-  wcscpy_s(lpwsz, 32, L"Session Timer Setup");
+  wcscpy_s(lpwsz, 32, L"Wolf-Timer Setup");
   lpw = (LPWORD)(lpwsz + wcslen(lpwsz) + 1);
 
   // Font
@@ -249,35 +329,35 @@ static HGLOBAL CreateSetupDialogTemplate() {
   // Add controls using numeric class IDs (0x0080=Button, 0x0081=Edit,
   // 0x0082=Static)
 
-  // Static: Time per block label
+  // Static: Questions per block label (top row)
   lpw = AddControlNumeric(lpw, WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 10, 12, 100,
-                          10, IDC_STATIC_TIME_LABEL, 0x0082,
-                          L"Time per block (min):");
-
-  // Edit: Time per block
-  lpw = AddControlNumeric(
-      lpw, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_NUMBER, 0, 120,
-      10, 40, 14, IDC_EDIT_TIME_PER_BLOCK, 0x0081, L"");
-
-  // Static: Number of blocks label
-  lpw = AddControlNumeric(lpw, WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 10, 32, 100,
-                          10, IDC_STATIC_BLOCKS_LABEL, 0x0082,
-                          L"Number of blocks:");
-
-  // Edit: Number of blocks
-  lpw = AddControlNumeric(
-      lpw, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_NUMBER, 0, 120,
-      30, 40, 14, IDC_EDIT_NUM_BLOCKS, 0x0081, L"");
-
-  // Static: Questions per block label
-  lpw = AddControlNumeric(lpw, WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 10, 52, 100,
                           10, IDC_STATIC_QUESTIONS_LABEL, 0x0082,
                           L"Questions per block:");
 
-  // Edit: Questions per block
+  // Edit: Questions per block (top row)
   lpw = AddControlNumeric(
       lpw, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_NUMBER, 0, 120,
-      50, 40, 14, IDC_EDIT_NUM_QUESTIONS, 0x0081, L"");
+      10, 40, 14, IDC_EDIT_NUM_QUESTIONS, 0x0081, L"");
+
+  // Static: Time per block label (second row)
+  lpw = AddControlNumeric(lpw, WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 10, 32, 100,
+                          10, IDC_STATIC_TIME_LABEL, 0x0082,
+                          L"Time per block (min):");
+
+  // Edit: Time per block (second row)
+  lpw = AddControlNumeric(
+      lpw, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_NUMBER, 0, 120,
+      30, 40, 14, IDC_EDIT_TIME_PER_BLOCK, 0x0081, L"");
+
+  // Static: Number of blocks label (third row)
+  lpw = AddControlNumeric(lpw, WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 10, 52, 100,
+                          10, IDC_STATIC_BLOCKS_LABEL, 0x0082,
+                          L"Number of blocks:");
+
+  // Edit: Number of blocks (third row)
+  lpw = AddControlNumeric(
+      lpw, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_NUMBER, 0, 120,
+      50, 40, 14, IDC_EDIT_NUM_BLOCKS, 0x0081, L"");
 
   // Static: Transparency label
   lpw = AddControlNumeric(lpw, WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 10, 72, 60,
@@ -294,23 +374,39 @@ static HGLOBAL CreateSetupDialogTemplate() {
 
   // Button: OK
   lpw = AddControlNumeric(lpw,
-                          WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-                          0, 50, 100, 50, 14, IDOK, 0x0080, L"Start");
+                          WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON |
+                              BS_FLAT,
+                          0, 10, 100, 64, 14, IDOK, 0x0080, L"Start");
+
+  // Button: Cover only (visible in settings mode)
+  lpw = AddControlNumeric(
+      lpw,
+      WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON | BS_FLAT,
+      0, 78, 100, 64, 14, IDC_BTN_SQUARE_ONLY, 0x0080, L"Cover only");
 
   // Button: Cancel
   lpw =
-      AddControlNumeric(lpw, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                        0, 120, 100, 50, 14, IDCANCEL, 0x0080, L"Cancel");
+      AddControlNumeric(lpw,
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON |
+                            BS_FLAT,
+                        0, 146, 100, 64, 14, IDCANCEL, 0x0080, L"Cancel");
 
   GlobalUnlock(hgbl);
   return hgbl;
 }
 
-bool ShowSetupDialog(HINSTANCE hInstance, HWND hParent, TimerConfig& config) {
+static SetupDialogResult MapDialogResult(INT_PTR result) {
+  if (result == IDOK) return SetupDialogResult::Accepted;
+  if (result == IDSETUP_SQUARE_ONLY) return SetupDialogResult::SquareOnly;
+  return SetupDialogResult::Cancelled;
+}
+
+SetupDialogResult ShowSetupDialog(HINSTANCE hInstance, HWND hParent,
+                                  TimerConfig& config) {
   g_isSettings = false;
 
   HGLOBAL hgbl = CreateSetupDialogTemplate();
-  if (!hgbl) return false;
+  if (!hgbl) return SetupDialogResult::Cancelled;
 
   INT_PTR result =
       DialogBoxIndirectParam(hInstance, (LPDLGTEMPLATE)GlobalLock(hgbl),
@@ -319,15 +415,15 @@ bool ShowSetupDialog(HINSTANCE hInstance, HWND hParent, TimerConfig& config) {
   GlobalUnlock(hgbl);
   GlobalFree(hgbl);
 
-  return (result == IDOK);
+  return MapDialogResult(result);
 }
 
-bool ShowSettingsDialog(HINSTANCE hInstance, HWND hParent,
-                        TimerConfig& config) {
+SetupDialogResult ShowSettingsDialog(HINSTANCE hInstance, HWND hParent,
+                                     TimerConfig& config) {
   g_isSettings = true;
 
   HGLOBAL hgbl = CreateSetupDialogTemplate();
-  if (!hgbl) return false;
+  if (!hgbl) return SetupDialogResult::Cancelled;
 
   INT_PTR result =
       DialogBoxIndirectParam(hInstance, (LPDLGTEMPLATE)GlobalLock(hgbl),
@@ -336,5 +432,5 @@ bool ShowSettingsDialog(HINSTANCE hInstance, HWND hParent,
   GlobalUnlock(hgbl);
   GlobalFree(hgbl);
 
-  return (result == IDOK);
+  return MapDialogResult(result);
 }

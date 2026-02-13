@@ -7,14 +7,22 @@
 
 #include "TimerState.h"
 
+enum class SetupDialogResult {
+  Cancelled = 0,
+  Accepted = 1,
+  SquareOnly = 2
+};
+
 // Show the setup dialog
-// Returns true if user clicked OK with valid settings
+// Returns the selected dialog action
 // config is populated with the user's choices
-bool ShowSetupDialog(HINSTANCE hInstance, HWND hParent, TimerConfig& config);
+SetupDialogResult ShowSetupDialog(HINSTANCE hInstance, HWND hParent,
+                                  TimerConfig& config);
 
 // Show settings dialog (same as setup but pre-populated)
-// Returns true if user clicked OK
-bool ShowSettingsDialog(HINSTANCE hInstance, HWND hParent, TimerConfig& config);
+// Returns the selected dialog action
+SetupDialogResult ShowSettingsDialog(HINSTANCE hInstance, HWND hParent,
+                                     TimerConfig& config);
 
 // Dialog procedure
 INT_PTR CALLBACK SetupDialogProc(HWND hDlg, UINT message, WPARAM wParam,

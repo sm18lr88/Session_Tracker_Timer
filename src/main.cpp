@@ -1,4 +1,4 @@
-// main.cpp - Session Timer Win32 Application Entry Point
+// main.cpp - Wolf-Timer Win32 Application Entry Point
 
 #include <windows.h>
 #include <commctrl.h>
@@ -31,34 +31,32 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     return 1;
   }
 
-  // Main application loop - show setup, then timer, repeat
-  bool continueApp = true;
-  while (continueApp) {
-    TimerConfig config = {};
+  TimerConfig config = {};
 
-    // Show setup dialog
-    if (!ShowSetupDialog(hInstance, NULL, config)) {
-      // User cancelled
-      continueApp = false;
-      break;
-    }
+  // Show setup dialog
+  SetupDialogResult setupResult = ShowSetupDialog(hInstance, NULL, config);
+  if (setupResult == SetupDialogResult::Cancelled) {
+    // User cancelled
+    return 0;
+  }
 
-    // Create and show timer window
-    HWND hTimerWnd = CreateTimerWindow(hInstance, config);
-    if (!hTimerWnd) {
-      MessageBox(NULL, L"Failed to create timer window.", L"Error",
-                 MB_OK | MB_ICONERROR);
-      continue;
-    }
+  // Create and show timer window
+  HWND hTimerWnd = CreateTimerWindow(hInstance, config);
+  if (!hTimerWnd) {
+    MessageBox(NULL, L"Failed to create timer window.", L"Error",
+               MB_OK | MB_ICONERROR);
+    return 1;
+  }
 
-    // Run message loop for timer window
-    MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0)) {
-      TranslateMessage(&msg);
-      DispatchMessage(&msg);
-    }
+  if (setupResult == SetupDialogResult::SquareOnly) {
+    PostMessage(hTimerWnd, WM_ENTER_COVER_ONLY_MODE, 0, 0);
+  }
 
-    // Timer window closed, loop back to show setup dialog again
+  // Run message loop until app exits
+  MSG msg;
+  while (GetMessage(&msg, NULL, 0, 0)) {
+    TranslateMessage(&msg);
+    DispatchMessage(&msg);
   }
 
   return 0;

@@ -3,10 +3,10 @@
   <assemblyIdentity
     version="1.0.0.0"
     processorArchitecture="*"
-    name="SessionTimer"
+    name="WolfTimer"
     type="win32"
   />
-  <description>Session Timer Application</description>
+  <description>Wolf-Timer Application</description>
 
   <!-- Enable visual styles (themed controls) -->
   <dependency>

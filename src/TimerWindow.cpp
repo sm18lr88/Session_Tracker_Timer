@@ -8,6 +8,7 @@
 
 #include <cstdio>
 
+#include "CoverSquareWindow.h"
 #include "SetupDialog.h"
 #include "resource.h"
 
@@ -23,6 +24,8 @@ static const int BASE_BTN_SMALL = 28;
 static const int BASE_LABEL_WIDTH = 70;
 static const int BASE_TIME_WIDTH = 50;
 static const int BASE_FONT_SIZE = 14;
+static const int HOTKEY_ID_TOGGLE_COVER = 0x5301;
+static const int BASE_SCREEN_MARGIN = 0;
 
 // Window data stored in GWLP_USERDATA
 struct TimerWindowData {
@@ -57,6 +60,9 @@ struct TimerWindowData {
   HWND hBtnPause;
   HWND hBtnClose;
   HWND hBtnSettings;
+  HWND hCoverSquare;
+  bool coverHotkeyRegistered;
+  bool squareOnlyMode;
 
   // Scale a value by DPI
   int Scale(int value) const { return MulDiv(value, dpi, 96); }
@@ -78,6 +84,211 @@ static TimerWindowData* GetWindowData(HWND hWnd) {
       GetWindowLongPtr(hWnd, GWLP_USERDATA));
 }
 
+static RECT GetTimerVirtualBounds(UINT dpi) {
+  int margin = MulDiv(BASE_SCREEN_MARGIN, dpi == 0 ? 96 : dpi, 96);
+
+  RECT bounds = {};
+  bounds.left = GetSystemMetrics(SM_XVIRTUALSCREEN) + margin;
+  bounds.top = GetSystemMetrics(SM_YVIRTUALSCREEN) + margin;
+  bounds.right =
+      GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN) -
+      margin;
+  bounds.bottom =
+      GetSystemMetrics(SM_YVIRTUALSCREEN) + GetSystemMetrics(SM_CYVIRTUALSCREEN) -
+      margin;
+  return bounds;
+}
+
+static void ClampRectToVirtualBounds(RECT* rect, const RECT& bounds) {
+  int width = rect->right - rect->left;
+  int height = rect->bottom - rect->top;
+  int boundsWidth = bounds.right - bounds.left;
+  int boundsHeight = bounds.bottom - bounds.top;
+
+  if (width > boundsWidth) {
+    rect->left = bounds.left;
+    rect->right = bounds.right;
+  } else {
+    if (rect->left < bounds.left) {
+      rect->left = bounds.left;
+      rect->right = rect->left + width;
+    }
+    if (rect->right > bounds.right) {
+      rect->right = bounds.right;
+      rect->left = rect->right - width;
+    }
+  }
+
+  if (height > boundsHeight) {
+    rect->top = bounds.top;
+    rect->bottom = bounds.bottom;
+  } else {
+    if (rect->top < bounds.top) {
+      rect->top = bounds.top;
+      rect->bottom = rect->top + height;
+    }
+    if (rect->bottom > bounds.bottom) {
+      rect->bottom = bounds.bottom;
+      rect->top = rect->bottom - height;
+    }
+  }
+}
+
+static bool IsTimingConfigChanged(const TimerConfig& oldConfig,
+                                  const TimerConfig& newConfig) {
+  return oldConfig.timePerBlock != newConfig.timePerBlock ||
+         oldConfig.numBlocks != newConfig.numBlocks ||
+         oldConfig.numQuestions != newConfig.numQuestions;
+}
+
+static void UpdateUI(HWND hWnd);
+static void CreateChildControls(HWND hWnd, TimerWindowData* pData);
+
+static void ToggleCoverSquareWindow(HWND hCoverSquare) {
+  if (!hCoverSquare || !IsWindow(hCoverSquare)) {
+    return;
+  }
+
+  if (IsWindowVisible(hCoverSquare)) {
+    ShowWindow(hCoverSquare, SW_HIDE);
+  } else {
+    ShowWindow(hCoverSquare, SW_SHOWNOACTIVATE);
+    SetWindowPos(hCoverSquare, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
+}
+
+static void DestroyChildControls(TimerWindowData* pData) {
+  if (!pData) return;
+
+  HWND controls[] = {
+      pData->hLabelQuestion,   pData->hLabelQuestionTime, pData->hProgressQuestion,
+      pData->hBtnStartStop,    pData->hLabelBlock,        pData->hLabelBlockTime,
+      pData->hProgressBlock,   pData->hBtnPause,          pData->hBtnClose,
+      pData->hBtnSettings,
+  };
+
+  for (HWND hCtrl : controls) {
+    if (hCtrl && IsWindow(hCtrl)) {
+      DestroyWindow(hCtrl);
+    }
+  }
+
+  pData->hLabelQuestion = NULL;
+  pData->hLabelQuestionTime = NULL;
+  pData->hProgressQuestion = NULL;
+  pData->hBtnStartStop = NULL;
+  pData->hLabelBlock = NULL;
+  pData->hLabelBlockTime = NULL;
+  pData->hProgressBlock = NULL;
+  pData->hBtnPause = NULL;
+  pData->hBtnClose = NULL;
+  pData->hBtnSettings = NULL;
+
+  if (pData->hFont) {
+    DeleteObject(pData->hFont);
+    pData->hFont = NULL;
+  }
+}
+
+static void EnsureCoverVisible(HWND hCoverSquare) {
+  if (!hCoverSquare || !IsWindow(hCoverSquare)) return;
+  ShowWindow(hCoverSquare, SW_SHOWNOACTIVATE);
+  SetWindowPos(hCoverSquare, HWND_TOPMOST, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+static void RebuildTimerControls(HWND hWnd, TimerWindowData* pData) {
+  if (!pData) return;
+  pData->ComputeScaledDimensions();
+  SetWindowPos(hWnd, NULL, 0, 0, pData->windowWidth, pData->windowHeight,
+               SWP_NOMOVE | SWP_NOZORDER);
+  DestroyChildControls(pData);
+  CreateChildControls(hWnd, pData);
+}
+
+static void ApplyConfigAndState(HWND hWnd, TimerWindowData* pData,
+                                const TimerConfig& newConfig, bool wasStopped,
+                                bool wasPaused, bool timingChanged) {
+  SetLayeredWindowAttributes(hWnd, 0, (BYTE)(255 * newConfig.transparency / 100),
+                             LWA_ALPHA);
+
+  if (timingChanged) {
+    pData->state.Initialize(newConfig);
+    if (wasStopped) {
+      pData->state.Stop();
+    } else if (wasPaused) {
+      pData->state.paused = true;
+    }
+    RebuildTimerControls(hWnd, pData);
+  } else {
+    pData->state.config.transparency = newConfig.transparency;
+    if (!wasStopped) {
+      pData->state.paused = wasPaused;
+    }
+  }
+}
+
+static void EnterCoverOnlyMode(HWND hWnd, TimerWindowData* pData) {
+  if (!pData) return;
+  pData->squareOnlyMode = true;
+  pData->state.Stop();
+  pData->state.paused = false;
+  UpdateUI(hWnd);
+  ShowWindow(hWnd, SW_HIDE);
+  EnsureCoverVisible(pData->hCoverSquare);
+}
+
+static void OpenSettingsPanel(HWND hWnd, TimerWindowData* pData) {
+  if (!pData) return;
+
+  const bool wasSquareOnly = pData->squareOnlyMode;
+  const bool wasStopped = pData->state.stopped;
+  const bool wasPaused = pData->state.paused;
+  const bool wasRunning = pData->state.IsRunning();
+
+  if (wasRunning) {
+    pData->state.TogglePause();
+    UpdateUI(hWnd);
+  }
+
+  TimerConfig newConfig = pData->state.config;
+  const HWND hParent = wasSquareOnly ? NULL : hWnd;
+  const SetupDialogResult result =
+      ShowSettingsDialog(pData->hInstance, hParent, newConfig);
+
+  if (result == SetupDialogResult::Cancelled) {
+    if (wasRunning) {
+      pData->state.TogglePause();
+    }
+    if (wasSquareOnly) {
+      pData->squareOnlyMode = true;
+      ShowWindow(hWnd, SW_HIDE);
+      EnsureCoverVisible(pData->hCoverSquare);
+    }
+    UpdateUI(hWnd);
+    return;
+  }
+
+  const bool timingChanged = IsTimingConfigChanged(pData->state.config, newConfig);
+  ApplyConfigAndState(hWnd, pData, newConfig, wasStopped, wasPaused, timingChanged);
+
+  if (result == SetupDialogResult::SquareOnly) {
+    EnterCoverOnlyMode(hWnd, pData);
+    return;
+  }
+
+  pData->squareOnlyMode = false;
+  if (wasSquareOnly) {
+    ShowWindow(hWnd, SW_SHOWNORMAL);
+    SetForegroundWindow(hWnd);
+  } else if (wasRunning && !timingChanged) {
+    pData->state.TogglePause();
+  }
+
+  UpdateUI(hWnd);
+}
+
 static void UpdateUI(HWND hWnd) {
   TimerWindowData* pData = GetWindowData(hWnd);
   if (!pData) return;
@@ -86,30 +297,40 @@ static void UpdateUI(HWND hWnd) {
   wchar_t buf[64];
 
   // Update question label
-  swprintf_s(buf, L"Q: %d/%d", state.currentQuestion,
-             state.config.numQuestions);
-  SetWindowText(pData->hLabelQuestion, buf);
+  if (pData->hLabelQuestion) {
+    swprintf_s(buf, L"Q: %d/%d", state.currentQuestion, state.config.numQuestions);
+    SetWindowText(pData->hLabelQuestion, buf);
+  }
 
   // Update question time
-  TimerState::FormatTime(state.questionTimeElapsed, buf, 64);
-  SetWindowText(pData->hLabelQuestionTime, buf);
+  if (pData->hLabelQuestionTime) {
+    TimerState::FormatTime(state.questionTimeElapsed, buf, 64);
+    SetWindowText(pData->hLabelQuestionTime, buf);
+  }
 
   // Update question progress bar
-  SendMessage(pData->hProgressQuestion, PBM_SETPOS, state.GetQuestionProgress(),
-              0);
+  if (pData->hProgressQuestion) {
+    SendMessage(pData->hProgressQuestion, PBM_SETPOS, state.GetQuestionProgress(),
+                0);
+  }
 
   // Update block label
-  swprintf_s(buf, L"Block %d/%d", state.currentBlock, state.config.numBlocks);
-  SetWindowText(pData->hLabelBlock, buf);
+  if (pData->hLabelBlock) {
+    swprintf_s(buf, L"Block %d/%d", state.currentBlock, state.config.numBlocks);
+    SetWindowText(pData->hLabelBlock, buf);
+  }
 
   // Update block time (show remaining time in current block)
-  int blockRemaining =
-      state.config.timePerBlockSeconds - state.blockTimeElapsed;
-  TimerState::FormatTime(blockRemaining, buf, 64);
-  SetWindowText(pData->hLabelBlockTime, buf);
+  if (pData->hLabelBlockTime) {
+    int blockRemaining = state.config.timePerBlockSeconds - state.blockTimeElapsed;
+    TimerState::FormatTime(blockRemaining, buf, 64);
+    SetWindowText(pData->hLabelBlockTime, buf);
+  }
 
   // Update block progress bar
-  SendMessage(pData->hProgressBlock, PBM_SETPOS, state.GetBlockProgress(), 0);
+  if (pData->hProgressBlock) {
+    SendMessage(pData->hProgressBlock, PBM_SETPOS, state.GetBlockProgress(), 0);
+  }
 
   // Update button states
   if (state.stopped) {
@@ -129,6 +350,17 @@ static void UpdateUI(HWND hWnd) {
 
 static void CreateChildControls(HWND hWnd, TimerWindowData* pData) {
   HINSTANCE hInst = pData->hInstance;
+
+  pData->hLabelQuestion = NULL;
+  pData->hLabelQuestionTime = NULL;
+  pData->hProgressQuestion = NULL;
+  pData->hBtnStartStop = NULL;
+  pData->hLabelBlock = NULL;
+  pData->hLabelBlockTime = NULL;
+  pData->hProgressBlock = NULL;
+  pData->hBtnPause = NULL;
+  pData->hBtnClose = NULL;
+  pData->hBtnSettings = NULL;
 
   // Create DPI-scaled font
   int fontSize = pData->Scale(BASE_FONT_SIZE);
@@ -165,45 +397,47 @@ static void CreateChildControls(HWND hWnd, TimerWindowData* pData) {
   x += timeWidth;
 
   // Question progress bar
-  int progressWidth = windowWidth - x - btnWidth - margin * 3;
+  int progressWidth = windowWidth - x - btnSmall * 2 - margin * 5;
   pData->hProgressQuestion = CreateWindow(
       PROGRESS_CLASS, NULL, WS_CHILD | WS_VISIBLE | PBS_SMOOTH, x,
       y + pData->Scale(4), progressWidth, rowHeight - pData->Scale(10), hWnd,
       (HMENU)IDC_PROGRESS_QUESTION, hInst, NULL);
-  // Set green color for question progress
   SetWindowTheme(pData->hProgressQuestion, L"", L"");
   SendMessage(pData->hProgressQuestion, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
   SendMessage(pData->hProgressQuestion, PBM_SETBARCOLOR, 0, RGB(0, 180, 0));
   SendMessage(pData->hProgressQuestion, PBM_SETBKCOLOR, 0, RGB(220, 220, 220));
   x += progressWidth + margin;
 
-  // Start/Stop button
-  pData->hBtnStartStop = CreateWindow(
-      L"BUTTON", L"Start", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, x,
-      y + pData->Scale(1), btnWidth, rowHeight - pData->Scale(4), hWnd,
-      (HMENU)IDC_BTN_START_STOP, hInst, NULL);
+  // Settings button (gear) - top row
+  pData->hBtnSettings = CreateWindow(
+      L"BUTTON", L"\u2699", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, x,
+      y + pData->Scale(1), btnSmall, rowHeight - pData->Scale(4), hWnd,
+      (HMENU)IDC_BTN_SETTINGS, hInst, NULL);
+  x += btnSmall + margin;
+
+  // Close button (red X) - top row
+  pData->hBtnClose =
+      CreateWindow(L"BUTTON", L"X", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, x,
+                   y + pData->Scale(1), btnSmall, rowHeight - pData->Scale(4),
+                   hWnd, (HMENU)IDC_BTN_CLOSE, hInst, NULL);
 
   // Row 2: Block info
   x = margin;
   y = margin + rowHeight;
 
-  // Block label
-  pData->hLabelBlock =
-      CreateWindow(L"STATIC", L"Block 1/3", WS_CHILD | WS_VISIBLE | SS_LEFT, x,
-                   y + pData->Scale(3), labelWidth, rowHeight - pData->Scale(6),
-                   hWnd, (HMENU)IDC_STATIC_BLOCK, hInst, NULL);
+  pData->hLabelBlock = CreateWindow(
+      L"STATIC", L"Block 1/3", WS_CHILD | WS_VISIBLE | SS_LEFT, x,
+      y + pData->Scale(3), labelWidth, rowHeight - pData->Scale(6), hWnd,
+      (HMENU)IDC_STATIC_BLOCK, hInst, NULL);
   x += labelWidth;
 
-  // Block time
-  pData->hLabelBlockTime =
-      CreateWindow(L"STATIC", L"00:00", WS_CHILD | WS_VISIBLE | SS_CENTER, x,
-                   y + pData->Scale(3), timeWidth, rowHeight - pData->Scale(6),
-                   hWnd, (HMENU)IDC_STATIC_BLOCK_TIME, hInst, NULL);
+  pData->hLabelBlockTime = CreateWindow(
+      L"STATIC", L"00:00", WS_CHILD | WS_VISIBLE | SS_CENTER, x,
+      y + pData->Scale(3), timeWidth, rowHeight - pData->Scale(6), hWnd,
+      (HMENU)IDC_STATIC_BLOCK_TIME, hInst, NULL);
   x += timeWidth;
 
-  // Block progress bar - same width calculation but account for more buttons
-  int blockProgressWidth =
-      windowWidth - x - btnWidth - btnSmall * 2 - margin * 5;
+  int blockProgressWidth = windowWidth - x - btnWidth * 2 - margin * 5;
   pData->hProgressBlock = CreateWindow(
       PROGRESS_CLASS, NULL, WS_CHILD | WS_VISIBLE | PBS_SMOOTH, x,
       y + pData->Scale(4), blockProgressWidth, rowHeight - pData->Scale(10),
@@ -214,25 +448,16 @@ static void CreateChildControls(HWND hWnd, TimerWindowData* pData) {
   SendMessage(pData->hProgressBlock, PBM_SETBKCOLOR, 0, RGB(220, 220, 220));
   x += blockProgressWidth + margin;
 
-  // Pause button
+  pData->hBtnStartStop = CreateWindow(
+      L"BUTTON", L"Start", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, x,
+      y + pData->Scale(1), btnWidth, rowHeight - pData->Scale(4), hWnd,
+      (HMENU)IDC_BTN_START_STOP, hInst, NULL);
+  x += btnWidth + margin;
+
   pData->hBtnPause = CreateWindow(
       L"BUTTON", L"Pause", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED,
       x, y + pData->Scale(1), btnWidth, rowHeight - pData->Scale(4), hWnd,
       (HMENU)IDC_BTN_PAUSE, hInst, NULL);
-  x += btnWidth + margin;
-
-  // Close button (red X)
-  pData->hBtnClose =
-      CreateWindow(L"BUTTON", L"X", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, x,
-                   y + pData->Scale(1), btnSmall, rowHeight - pData->Scale(4),
-                   hWnd, (HMENU)IDC_BTN_CLOSE, hInst, NULL);
-  x += btnSmall + margin;
-
-  // Settings button (gear)
-  pData->hBtnSettings = CreateWindow(
-      L"BUTTON", L"\u2699",  // Gear unicode character
-      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, x, y + pData->Scale(1), btnSmall,
-      rowHeight - pData->Scale(4), hWnd, (HMENU)IDC_BTN_SETTINGS, hInst, NULL);
 
   // Apply font to all controls
   HWND controls[] = {pData->hLabelQuestion, pData->hLabelQuestionTime,
@@ -259,6 +484,9 @@ LRESULT CALLBACK TimerWindowProc(HWND hWnd, UINT message, WPARAM wParam,
       pData->hInstance = (HINSTANCE)GetWindowLongPtr(hWnd, GWLP_HINSTANCE);
       pData->state.Initialize(*pConfig);
       pData->hBackBrush = CreateSolidBrush(RGB(45, 45, 48));
+      pData->hCoverSquare = NULL;
+      pData->coverHotkeyRegistered = false;
+      pData->squareOnlyMode = false;
 
       // Get DPI for this window
       pData->dpi = GetDpiForWindow(hWnd);
@@ -279,6 +507,20 @@ LRESULT CALLBACK TimerWindowProc(HWND hWnd, UINT message, WPARAM wParam,
 
       // Create child controls
       CreateChildControls(hWnd, pData);
+
+      // Create always-on-top black cover square for hiding answer choices.
+      pData->hCoverSquare = CreateCoverSquareWindow(pData->hInstance, hWnd);
+
+      UINT modifiers = MOD_SHIFT;
+#ifdef MOD_NOREPEAT
+      modifiers |= MOD_NOREPEAT;
+#endif
+      pData->coverHotkeyRegistered =
+          RegisterHotKey(hWnd, HOTKEY_ID_TOGGLE_COVER, modifiers, VK_SPACE);
+      if (!pData->coverHotkeyRegistered) {
+        pData->coverHotkeyRegistered =
+            RegisterHotKey(hWnd, HOTKEY_ID_TOGGLE_COVER, MOD_SHIFT, VK_SPACE);
+      }
 
       // Set transparency
       SetLayeredWindowAttributes(
@@ -308,6 +550,28 @@ LRESULT CALLBACK TimerWindowProc(HWND hWnd, UINT message, WPARAM wParam,
       return 0;
     }
 
+    case WM_HOTKEY:
+      if (pData && wParam == HOTKEY_ID_TOGGLE_COVER) {
+        ToggleCoverSquareWindow(pData->hCoverSquare);
+      }
+      return 0;
+
+    case WM_COVER_SQUARE_OPEN_SETTINGS:
+      if (pData) {
+        OpenSettingsPanel(hWnd, pData);
+      }
+      return 0;
+
+    case WM_COVER_SQUARE_CLOSE_APP:
+      DestroyWindow(hWnd);
+      return 0;
+
+    case WM_ENTER_COVER_ONLY_MODE:
+      if (pData) {
+        EnterCoverOnlyMode(hWnd, pData);
+      }
+      return 0;
+
     case WM_COMMAND: {
       if (!pData) break;
 
@@ -331,27 +595,7 @@ LRESULT CALLBACK TimerWindowProc(HWND hWnd, UINT message, WPARAM wParam,
           return 0;
 
         case IDC_BTN_SETTINGS: {
-          // Pause timer while settings dialog is open
-          bool wasRunning = pData->state.IsRunning();
-          if (wasRunning) {
-            pData->state.TogglePause();
-            UpdateUI(hWnd);
-          }
-
-          TimerConfig newConfig = pData->state.config;
-          if (ShowSettingsDialog(pData->hInstance, hWnd, newConfig)) {
-            // Apply new settings
-            // Note: Changing time settings mid-session can cause issues,
-            // so we only update transparency immediately
-            pData->state.config.transparency = newConfig.transparency;
-            SetLayeredWindowAttributes(
-                hWnd, 0, (BYTE)(255 * newConfig.transparency / 100), LWA_ALPHA);
-          }
-
-          if (wasRunning) {
-            pData->state.TogglePause();
-            UpdateUI(hWnd);
-          }
+          OpenSettingsPanel(hWnd, pData);
           return 0;
         }
       }
@@ -378,9 +622,10 @@ LRESULT CALLBACK TimerWindowProc(HWND hWnd, UINT message, WPARAM wParam,
 
         // Get suggested new window rect
         RECT* prcNewWindow = (RECT*)lParam;
-        SetWindowPos(hWnd, NULL, prcNewWindow->left, prcNewWindow->top,
-                     prcNewWindow->right - prcNewWindow->left,
-                     prcNewWindow->bottom - prcNewWindow->top,
+        RECT clamped = *prcNewWindow;
+        ClampRectToVirtualBounds(&clamped, GetTimerVirtualBounds(pData->dpi));
+        SetWindowPos(hWnd, NULL, clamped.left, clamped.top,
+                     clamped.right - clamped.left, clamped.bottom - clamped.top,
                      SWP_NOZORDER | SWP_NOACTIVATE);
 
         // Recreate font with new size
@@ -404,6 +649,22 @@ LRESULT CALLBACK TimerWindowProc(HWND hWnd, UINT message, WPARAM wParam,
 
         // Force redraw
         InvalidateRect(hWnd, NULL, TRUE);
+      }
+      return 0;
+    }
+
+    case WM_WINDOWPOSCHANGING: {
+      WINDOWPOS* wp = reinterpret_cast<WINDOWPOS*>(lParam);
+      if (wp && ((wp->flags & SWP_NOMOVE) == 0 || (wp->flags & SWP_NOSIZE) == 0)) {
+        UINT dpi = pData ? pData->dpi : GetDpiForWindow(hWnd);
+        if (dpi == 0) dpi = 96;
+
+        RECT pending = {wp->x, wp->y, wp->x + wp->cx, wp->y + wp->cy};
+        ClampRectToVirtualBounds(&pending, GetTimerVirtualBounds(dpi));
+        wp->x = pending.left;
+        wp->y = pending.top;
+        wp->cx = pending.right - pending.left;
+        wp->cy = pending.bottom - pending.top;
       }
       return 0;
     }
@@ -443,6 +704,14 @@ LRESULT CALLBACK TimerWindowProc(HWND hWnd, UINT message, WPARAM wParam,
     case WM_DESTROY: {
       KillTimer(hWnd, IDT_TIMER);
       if (pData) {
+        if (pData->coverHotkeyRegistered) {
+          UnregisterHotKey(hWnd, HOTKEY_ID_TOGGLE_COVER);
+          pData->coverHotkeyRegistered = false;
+        }
+        if (pData->hCoverSquare && IsWindow(pData->hCoverSquare)) {
+          DestroyWindow(pData->hCoverSquare);
+          pData->hCoverSquare = NULL;
+        }
         if (pData->hFont) DeleteObject(pData->hFont);
         if (pData->hBackBrush) DeleteObject(pData->hBackBrush);
         delete pData;
@@ -457,6 +726,10 @@ LRESULT CALLBACK TimerWindowProc(HWND hWnd, UINT message, WPARAM wParam,
 }
 
 bool RegisterTimerWindowClass(HINSTANCE hInstance) {
+  if (!RegisterCoverSquareWindowClass(hInstance)) {
+    return false;
+  }
+
   WNDCLASSEX wc = {};
   wc.cbSize = sizeof(WNDCLASSEX);
   wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -464,12 +737,14 @@ bool RegisterTimerWindowClass(HINSTANCE hInstance) {
   wc.cbClsExtra = 0;
   wc.cbWndExtra = 0;
   wc.hInstance = hInstance;
-  wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+  wc.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
+  if (!wc.hIcon) wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
   wc.hCursor = LoadCursor(NULL, IDC_ARROW);
   wc.hbrBackground = NULL;  // We handle painting
   wc.lpszMenuName = NULL;
   wc.lpszClassName = TIMER_WINDOW_CLASS;
-  wc.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
+  wc.hIconSm = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
+  if (!wc.hIconSm) wc.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
 
   return RegisterClassEx(&wc) != 0;
 }
@@ -495,7 +770,7 @@ HWND CreateTimerWindow(HINSTANCE hInstance, const TimerConfig& config) {
   // Create with WS_POPUP (no title bar), WS_EX_TOPMOST (always on top),
   // WS_EX_LAYERED (transparency)
   HWND hWnd = CreateWindowEx(WS_EX_TOPMOST | WS_EX_LAYERED, TIMER_WINDOW_CLASS,
-                             L"Session Timer", WS_POPUP | WS_VISIBLE, x,
+                             L"Wolf-Timer", WS_POPUP | WS_VISIBLE, x,
                              scaledY, scaledWidth, scaledHeight, NULL, NULL,
                              hInstance, (LPVOID)&config);
 

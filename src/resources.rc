@@ -1,7 +1,10 @@
-// resources.rc - Resource file for Session Timer
+// resources.rc - Resource file for Wolf-Timer
 
 #include <windows.h>
 #include "resource.h"
+
+// Application icon
+IDI_APP_ICON ICON "app_icon.ico"
 
 // Application manifest for visual styles and DPI awareness
 1 RT_MANIFEST "app.manifest"
@@ -20,13 +23,13 @@ BEGIN
     BEGIN
         BLOCK "040904E4"
         BEGIN
-            VALUE "CompanyName",      "Session Timer"
-            VALUE "FileDescription",  "Session Timer Application"
+            VALUE "CompanyName",      "Wolf-Timer"
+            VALUE "FileDescription",  "Wolf-Timer Application"
             VALUE "FileVersion",      "1.0.0.0"
-            VALUE "InternalName",     "SessionTimer"
+            VALUE "InternalName",     "WolfTimer"
             VALUE "LegalCopyright",   "Public Domain"
-            VALUE "OriginalFilename", "SessionTimer.exe"
-            VALUE "ProductName",      "Session Timer"
+            VALUE "OriginalFilename", "Wolf-Timer.exe"
+            VALUE "ProductName",      "Wolf-Timer"
             VALUE "ProductVersion",   "1.0.0.0"
         END
     END

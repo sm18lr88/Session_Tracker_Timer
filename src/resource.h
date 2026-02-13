@@ -1,4 +1,4 @@
-// resource.h - Control IDs for Session Timer
+// resource.h - Control IDs for Wolf-Timer
 
 #ifndef RESOURCE_H
 #define RESOURCE_H
@@ -13,6 +13,7 @@
 #define IDC_STATIC_TIME_LABEL 106
 #define IDC_STATIC_BLOCKS_LABEL 107
 #define IDC_STATIC_QUESTIONS_LABEL 108
+#define IDC_BTN_SQUARE_ONLY 109
 #define IDOK 1
 #define IDCANCEL 2
 

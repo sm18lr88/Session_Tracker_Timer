@@ -1,7 +1,12 @@
 # Build directories
 build/
+build-vs2026/
+build-test/
 out/
 cmake-build-*/
+build-macos/
+dist/
+Wolf-Timer.exe
 
 # Visual Studio
 .vs/
@@ -13,3 +18,6 @@ ipch/
 
 # Temporary folders
 session-timer-win32/
+
+# macOS
+.DS_Store

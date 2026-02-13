@@ -8,10 +8,11 @@
 #include "TimerState.h"
 
 // Window class name
-#define TIMER_WINDOW_CLASS L"SessionTimerWindowClass"
+#define TIMER_WINDOW_CLASS L"WolfTimerWindowClass"
 
 // Custom messages
 #define WM_UPDATE_TRANSPARENCY (WM_USER + 100)
+#define WM_ENTER_COVER_ONLY_MODE (WM_APP + 230)
 
 // Register the timer window class
 bool RegisterTimerWindowClass(HINSTANCE hInstance);
