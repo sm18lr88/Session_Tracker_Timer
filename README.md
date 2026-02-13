@@ -1,9 +1,10 @@
 # Wolf-Timer
 
-Helps users know how far along they should be per question block, and per question itself.
+App to keep pace when doing questions, and/or cover your answer choices.
 
-<img width="600" height="467" alt="image" src="https://github.com/user-attachments/assets/2d1eb5d8-1fdb-4b11-9e58-58a4cb2b22f8" />
-<img width="472" height="481" alt="image" src="https://github.com/user-attachments/assets/7932ad67-926a-4b4c-b86b-df816c7fd68c" />
+<img width="472" alt="image" src="https://github.com/user-attachments/assets/84722979-d19a-4be1-9a47-7a2eb5f0b01c" />
+<img width="600" alt="image" src="https://github.com/user-attachments/assets/e152d7b8-e3c7-4bd1-b9a1-0e10c364af4d" />
+
 
 Current version: `v0.5`
 
