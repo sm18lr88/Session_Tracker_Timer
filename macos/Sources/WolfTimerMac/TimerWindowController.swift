@@ -188,7 +188,6 @@ final class TimerWindowController: NSWindowController {
         progress.controlSize = .small
         progress.style = .bar
         progress.wantsLayer = true
-        progress.contentTintColor = color
     }
 
     private func configureButton(_ button: NSButton, action: Selector) {
